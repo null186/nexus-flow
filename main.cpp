@@ -1,8 +1,8 @@
 /**
- * message-thread is open source and released under the Apache License, Version 2.0.
- * You can find a copy of this license in the `https://www.apache.org/licenses/LICENSE-2.0`.
+ * nexus-flow is open source and released under the Apache License, Version 2.0. You can find a copy
+ * of this license in the `https://www.apache.org/licenses/LICENSE-2.0`.
  *
- * For those wishing to use message-thread under terms other than those of the Apache License, a
+ * For those wishing to use nexus-flow under terms other than those of the Apache License, a
  * commercial license is available. For more information on the commercial license terms and how to
  * obtain a commercial license, please contact me.
  */
@@ -13,92 +13,83 @@
 
 namespace nf {
 
-struct CustomParam {
-    std::string s = "Hello World!";
+struct TestParam {
+    std::string success = "Task success";
+    std::string failed = "Task failed";
 };
 
-class FirstTask final : public BaseTask<CustomParam, int> {
+class FirstTask final : public BaseTask<TestParam, std::string> {
   public:
-    explicit FirstTask(TaskContext* tc) : BaseTask<CustomParam, int>(tc) {}
+    explicit FirstTask(TaskContext* tc) : BaseTask<TestParam, std::string>(tc) {}
 
     ~FirstTask() override = default;
 
-    void Start() override {
+    void Run() override {
         std::cout << "First task start." << std::endl;
-        if (params_.s == "Hello World!") {
-            TaskSuccess(1);
-        } else {
-            TaskFailed(0);
-        }
+        BaseTask<TestParam, std::string>::Success(params_.success);
     }
 
-    void Finish() override {}
-
-    void TaskSuccess(const int& param) override { BaseTask<CustomParam, int>::TaskSuccess(param); }
-
-    void TaskFailed(const int& param) override { BaseTask<CustomParam, int>::TaskFailed(param); }
+    void OnFinish(const std::string& param) override {
+        std::cout << "First task finish, string is " << param << std::endl;
+    }
 };
 
-class SecondTask final : public BaseTask<int, std::string> {
+class SecondTask final : public BaseTask<std::string, int> {
   public:
-    explicit SecondTask(TaskContext* tc) : BaseTask<int, std::string>(tc) {}
+    explicit SecondTask(TaskContext* tc) : BaseTask<std::string, int>(tc) {}
 
     ~SecondTask() override = default;
 
-    void Start() override { std::cout << "Second task start." << std::endl; }
-
-    void Finish() override {}
-
-    void TaskSuccess(const std::string& param) override {
-        BaseTask<int, std::string>::TaskSuccess(param);
+    void Run() override {
+        std::cout << "Second task start." << std::endl;
+        if (params_ == "Task success") {
+            BaseTask<std::string, int>::Success(1);
+        } else {
+            BaseTask<std::string, int>::Failed(0);
+        }
     }
 
-    void TaskFailed(const std::string& param) override {
-        BaseTask<int, std::string>::TaskFailed(param);
+    void OnFinish(const int& param) override {
+        std::cout << "Second task finish, value is " << param << std::endl;
     }
 };
 
-class AssemblerTask : public BaseTask<CustomParam, CustomParam> {
+class ThirdTask final : public BaseTask<int, bool> {
   public:
-    explicit AssemblerTask(TaskContext* tc) : BaseTask<CustomParam, CustomParam>(tc) {
-        first_task_ = new FirstTask(tc);
-        second_task_ = new SecondTask(tc);
+    explicit ThirdTask(TaskContext* tc) : BaseTask<int, bool>(tc) {}
+
+    ~ThirdTask() override = default;
+
+    void Run() override {
+        std::cout << "Third task start." << std::endl;
+        if (params_ == 1) {
+            BaseTask<int, bool>::Success(true);
+        } else {
+            BaseTask<int, bool>::Failed(false);
+        }
     }
 
-    ~AssemblerTask() override { delete first_task_; }
-
-    void Assembler() {
-        BaseTask<CustomParam, CustomParam>::Follow(first_task_)->Then(second_task_);
+    void OnFinish(const bool& param) override {
+        std::cout << "Third task finish, bool is " << param << std::endl;
     }
-
-    void SetParam(const CustomParam& param) override {
-        BaseTask<CustomParam, CustomParam>::SetParam(param);
-    }
-
-    void Start() override {
-        BaseTask<CustomParam, CustomParam>::TaskFailed(BaseTask<CustomParam, CustomParam>::params_);
-        BaseTask<CustomParam, CustomParam>::TaskSuccess(
-                BaseTask<CustomParam, CustomParam>::params_);
-    }
-
-    void Finish() override {
-        // TODO
-    }
-
-  private:
-    FirstTask* first_task_ = nullptr;
-    SecondTask* second_task_ = nullptr;
 };
 
 }  // namespace nf
 
 int main() {
-    nf::CustomParam param;
-    nf::TaskContext tk;
-    auto at = nf::AssemblerTask(&tk);
-    at.Assembler();
-    at.SetParam(param);
-    at.Start();
+    nf::TaskContext tc;
+    auto* first_task = new nf::FirstTask(&tc);
+    auto* second_task = new nf::SecondTask(&tc);
+    auto* third_task = new nf::ThirdTask(&tc);
+
+    nf::TestParam param;
+    first_task->SetParam(param);
+    first_task->Follow(second_task)->Then(third_task);
+    first_task->Run();
+
+    delete third_task;
+    delete second_task;
+    delete first_task;
 
     return 0;
 }
