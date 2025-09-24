@@ -9,277 +9,198 @@
 
 #pragma once
 
-#include <chrono>
-#include <future>
-#include <string>
-#include <thread>
-
-#define UNUSED __attribute__((unused))
-
 namespace nf {
 
-class TaskContext {
+template <typename O>
+class AssemblerListener {
   public:
-    TaskContext() = default;
+    virtual ~AssemblerListener() = default;
+    virtual void Success(const O& o) = 0;
+    virtual void Failed(const O& o) = 0;
+};
 
-    ~TaskContext() = default;
-
-    // TODO: Add something.
+template <typename I>
+class Assembler {
+  public:
+    virtual ~Assembler() = default;
+    virtual void Assemble() = 0;
+    virtual void Run(const I& i) = 0;
 };
 
 template <typename I, typename O>
 class Task {
   public:
-    Task() = default;
-
     virtual ~Task() = default;
-
-    /**
-     * Set task param.
-     *
-     * @param param Task param.
-     */
-    virtual void SetParam(const I& param) = 0;
-
-    /**
-     * Task run.
-     */
-    virtual void Run() = 0;
-
-    /**
-     * Task success.
-     *
-     * @param param Input param.
-     */
-    virtual void Success(const O& param) = 0;
-
-    /**
-     * Task failed.
-     *
-     * @param param Input param.
-     */
-    virtual void Failed(const O& param) = 0;
-
-    /**
-     * Task finish.
-     */
-    virtual void OnFinish(const O& param) = 0;
+    virtual void Run(const I& i) = 0;
+    virtual void Finish(const O& o) = 0;
 };
 
-template <typename O>
+template <typename O, typename F>
 class TaskListener {
   public:
-    TaskListener() = default;
-
     virtual ~TaskListener() = default;
-
-    /**
-     * Task success callback.
-     *
-     * @param param The input data type of the next task.
-     */
-    virtual void OnSuccess(const O& param) = 0;
-
-    /**
-     * Task failed callback.
-     *
-     * @param param The input data type of the next task.
-     */
-    virtual void OnFailed(const O& param) = 0;
+    virtual void NextSuccess(const O& o) = 0;
+    virtual void NextFailed(const O& o) = 0;
+    virtual void FinalSuccess(const F& f) = 0;
+    virtual void FinalFailed(const F& f) = 0;
 };
 
-/**
- * Task bridge.
- *
- * @tparam O The input data type of the current task.
- * @tparam O The output data type of the current task is also the input data type of the next task.
- * @tparam X The output data type of the next task.
- */
-template <typename I, typename O, typename X>
-class TaskBridge : public TaskListener<O> {
+template <typename I, typename O>
+template <typename X, typename F>
+class TaskBridge : public TaskListener<O, F> {
   public:
-    TaskBridge() = default;
+    explicit TaskBridge(AssemblerListener<F>* listener) : listener_(listener) {}
+    virtual ~TaskBridge() = default;
+  
+    void SetTask(Task<I, O>* ct, Task<O, X>* nt) { 
+      nt_ = nt;
+      ct = ct_; 
+    }
 
-    ~TaskBridge() override = default;
+    void FinalSuccess(const F& f) override {
+      if (listener_) {
+        listener_->Success(f);
+      }
+    }
 
-    void SetNextTask(Task<O, X>* task) { next_task_ = task; }
+    void FinalFailed(const F& f) override {
+      if (listener_) {
+        listener_->Failed(f);
+      }
+    }
 
-    Task<O, X>* GetNextTask() { return next_task_; }
-
-    void SetCurrentTask(Task<I, O>* task) { current_task_ = task; }
-
-    Task<I, O>* GetCurrentTask() { return current_task_; }
+  protected:
+    Task<O, X>* GetNextTask() { return nt_; }
+    Task<I, O>* GetCurrentTask() { return ct_; }
 
   private:
-    Task<I, O>* current_task_ = nullptr;
-    Task<O, X>* next_task_ = nullptr;
+    Task<I, O>* ct_ = nullptr;
+    Task<O, X>* nt_ = nullptr;
+    AssemblerListener<F>* listener_ = nullptr;
 };
 
-/**
- * Then mode task bridge.
- * If the current task succeeds, the next task is continued.
- * If the current task fails, the task is not continued.
- */
-template <typename I, typename O, typename X>
-class ThenTaskBridge final : public TaskBridge<I, O, X> {
+template <typename I, typename O>
+template <typename X, typename F>
+class ThenTaskBridge final : public TaskBridge<I, O, X, F> {
   public:
-    ThenTaskBridge() = default;
+    explicit ThenTaskBridge(AssemblerListener<F>* listener) : TaskBridge(listener) {}
 
     ~ThenTaskBridge() override = default;
 
-    void OnSuccess(const O& param) override {
-        auto* current_task = TaskBridge<I, O, X>::GetCurrentTask();
-        if (!current_task) {
+    void NextSuccess(const O& o) override {
+        auto* ct = GetCurrentTask();
+        if (!ct) {
             return;
         }
-        current_task->OnFinish(param);
+        ct->Finish(o);
 
-        auto* next_task = TaskBridge<I, O, X>::GetNextTask();
-        if (!next_task) {
+        auto* nt = GetNextTask();
+        if (!nt) {
             return;
         }
-        next_task->SetParam(param);
-        next_task->Run();
+        nt->Run(o);
     }
 
-    void OnFailed(const O& UNUSED param) override {
-        auto* current_task = TaskBridge<I, O, X>::GetCurrentTask();
-        if (!current_task) {
+    void NextFailed(const O& o) override {
+        auto* ct = GetCurrentTask();
+        if (!ct) {
             return;
         }
-        current_task->OnFinish(param);
+        ct->Finish(o);
     }
 };
 
-/**
- * Follow mode task bridge.
- * Continue to execute the next task regardless of whether the current task is successfully
- * executed.
- */
-template <typename I, typename O, typename X>
-class FollowTaskBridge final : public TaskBridge<I, O, X> {
+template <typename I, typename O>
+template <typename X, typename F>
+class FollowTaskBridge final : public TaskBridge<I, O, X, F> {
   public:
-    FollowTaskBridge() = default;
+    explicit FollowTaskBridge(AssemblerListener<F>* listener) : TaskBridge(listener) {}
 
     ~FollowTaskBridge() override = default;
 
-    void OnSuccess(const O& param) override {
-        auto* current_task = TaskBridge<I, O, X>::GetCurrentTask();
-        if (!current_task) {
+    void NextSuccess(const O& o) override {
+        auto* ct = GetCurrentTask();
+        if (!ct) {
             return;
         }
-        current_task->OnFinish(param);
+        ct->Finish(o);
 
-        auto* next_task = TaskBridge<I, O, X>::GetNextTask();
-        if (!next_task) {
+        auto* nt = GetNextTask();
+        if (!nt) {
             return;
         }
-        next_task->SetParam(param);
-        next_task->Run();
+        nt->Run(o);
     }
 
-    void OnFailed(const O& param) override {
-        auto* current_task = TaskBridge<I, O, X>::GetCurrentTask();
-        if (!current_task) {
+    void NextFailed(const O& o) override {
+        auto* ct = GetCurrentTask();
+        if (!ct) {
             return;
         }
-        current_task->OnFinish(param);
+        ct->Finish(o);
 
-        auto* next_task = TaskBridge<I, O, X>::GetNextTask();
-        if (!next_task) {
+        auto* nt = GetNextTask();
+        if (!nt) {
             return;
         }
-        next_task->SetParam(param);
-        next_task->Run();
+        nt->Run(o);
     }
 };
 
 #if 0
-template <typename O, typename X>
-class AsyncTaskBridge : public TaskBridge<O, X> {
-    // TODO: 待实现
-};
-
-template <typename O, typename X>
-class LoopTaskBridge : public TaskBridge<O, X> {
-    // TODO: 待实现
-};
-
-template <typename O, typename X>
-class RetryTaskBridge : public TaskBridge<O, X> {
-  public:
-    // TODO: 待实现
-
-  private:
-    int max_retries_ = 0;
-    int retry_count_ = 0;
-    std::chrono::milliseconds delay_ = std::chrono::milliseconds(0);
-};
+class AsyncTaskBridge;
+class LoopTaskBridge;
+class RetryTaskBridge;
 #endif
 
 template <typename I, typename O>
+template <typename F>
 class BaseTask : public Task<I, O> {
   public:
-    explicit BaseTask(TaskContext* tc) : task_context_(tc) {}
-
     ~BaseTask() override = default;
 
-    /**
-     * The task is bridged in Then mode.
-     *
-     * @tparam X The output data type of the next task.
-     * @param task Next task.
-     * @return Next task.
-     */
     template <typename X>
     BaseTask<O, X>* Then(BaseTask<O, X>* task) {
-        std::unique_ptr<ThenTaskBridge<I, O, X>> bridge(new ThenTaskBridge<I, O, X>());
-        bridge->SetCurrentTask(this);
-        bridge->SetNextTask(task);
-        listener_ = std::move(bridge);
+        listener_ = new ThenTaskBridge<I, O, X, F>(assembler_listener_);
+        bridge->SetTask(this, task);
         return task;
     }
 
-    /**
-     * The task is bridged in Follow mode.
-     *
-     * @tparam X The output data type of the next task.
-     * @param task Next task.
-     * @return Next task.
-     */
     template <typename X>
     BaseTask<O, X>* Follow(BaseTask<O, X>* task) {
-        std::unique_ptr<FollowTaskBridge<I, O, X>> bridge(new FollowTaskBridge<I, O, X>());
-        bridge->SetCurrentTask(this);
-        bridge->SetNextTask(task);
-        listener_ = std::move(bridge);
+        listener_ = new FollowTaskBridge<I, O, X, F>(assembler_listener_);
+        bridge->SetTask(this, task);
         return task;
     }
 
-    void SetParam(const I& param) final {
-        // TODO: 拷贝浪费性能。
-        params_ = param;
-    }
-
   protected:
-    void Success(const O& param) final {
+    void NextSuccess(const O& o) final {
         if (listener_) {
-            listener_->OnSuccess(param);
+            listener_->NextSuccess(o);
         }
     }
 
-    void Failed(const O& param) final {
+    void NextFailed(const O& o) final {
         if (listener_) {
-            listener_->OnFailed(param);
+            listener_->NextFailed(o);
         }
     }
 
-  protected:
-    TaskContext* UNUSED task_context_ = nullptr;
-    I params_;
+    void FinalSuccess(const F& f) final {
+        if (listener_) {
+            listener_->FinalSuccess(f);
+        }
+    }
+
+    void FinalFailed(const F& f) final {
+        if (listener_) {
+            listener_->FinalFailed(f);
+        }
+    }
 
   private:
-    std::unique_ptr<TaskListener<O>> listener_;
+    TaskListener<O, F>* listener_ = nullptr;
+    AssemblerListener<F>* assembler_listener_ = nullptr;
 };
 
 }  // namespace nf
