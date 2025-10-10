@@ -1,206 +1,179 @@
 /**
- * nexus-flow is open source and released under the Apache License, Version 2.0. You can find a copy
- * of this license in the `https://www.apache.org/licenses/LICENSE-2.0`.
+ * nexus-flow is open source and released under the Apache License, Version 2.0.
+ * You can find a copy of this license in the
+ * `https://www.apache.org/licenses/LICENSE-2.0`.
  *
- * For those wishing to use nexus-flow under terms other than those of the Apache License, a
- * commercial license is available. For more information on the commercial license terms and how to
- * obtain a commercial license, please contact me.
+ * For those wishing to use nexus-flow under terms other than those of the
+ * Apache License, a commercial license is available. For more information on
+ * the commercial license terms and how to obtain a commercial license, please
+ * contact me.
  */
 
 #pragma once
 
 namespace nf {
 
-template <typename O>
-class AssemblerListener {
-  public:
-    virtual ~AssemblerListener() = default;
-    virtual void Success(const O& o) = 0;
-    virtual void Failed(const O& o) = 0;
+template <typename F>
+class FinalListener {
+ public:
+  virtual ~FinalListener() = default;
+  virtual void Success(const F& f) = 0;
+  virtual void Failed(const F& f) = 0;
 };
 
 template <typename I>
 class Assembler {
-  public:
-    virtual ~Assembler() = default;
-    virtual void Assemble() = 0;
-    virtual void Run(const I& i) = 0;
+ public:
+  virtual ~Assembler() = default;
+  virtual void Assemble() = 0;
+  virtual void Run(const I& i) = 0;
 };
 
 template <typename I, typename O>
 class Task {
-  public:
-    virtual ~Task() = default;
-    virtual void Run(const I& i) = 0;
-    virtual void Finish(const O& o) = 0;
+ public:
+  virtual ~Task() = default;
+  virtual void Run(const I& i) = 0;
+  virtual void Finish(const O& o) = 0;
 };
 
 template <typename O, typename F>
 class TaskListener {
-  public:
-    virtual ~TaskListener() = default;
-    virtual void NextSuccess(const O& o) = 0;
-    virtual void NextFailed(const O& o) = 0;
-    virtual void FinalSuccess(const F& f) = 0;
-    virtual void FinalFailed(const F& f) = 0;
+ public:
+  virtual ~TaskListener() = default;
+  virtual void NextSuccess(const O& o) = 0;
+  virtual void NextFailed(const O& o) = 0;
+  virtual void FinalSuccess(const F& f) = 0;
+  virtual void FinalFailed(const F& f) = 0;
 };
 
-template <typename I, typename O>
-template <typename X, typename F>
+template <typename I, typename O, typename X, typename F>
 class TaskBridge : public TaskListener<O, F> {
-  public:
-    explicit TaskBridge(AssemblerListener<F>* listener) : listener_(listener) {}
-    virtual ~TaskBridge() = default;
-  
-    void SetTask(Task<I, O>* ct, Task<O, X>* nt) { 
-      nt_ = nt;
-      ct = ct_; 
+ public:
+  TaskBridge(std::shared_ptr<Task<I, O>> ct, std::shared_ptr<Task<O, X>> nt,
+             std::shared_ptr<FinalListener<F>> fl)
+      : ct_(ct), nt_(nt), fl_(fl) {}
+  ~TaskBridge() override = default;
+
+  void NextSuccess(const O& o) override {
+    if (!ct_) {
+      return;
     }
+    ct_->Finish(o);
 
-    void FinalSuccess(const F& f) override {
-      if (listener_) {
-        listener_->Success(f);
-      }
+    if (!nt_) {
+      return;
     }
+    nt_->Run(o);
+  }
 
-    void FinalFailed(const F& f) override {
-      if (listener_) {
-        listener_->Failed(f);
-      }
+  void FinalSuccess(const F& f) override {
+    if (fl_) {
+      fl_->Success(f);
     }
+  }
 
-  protected:
-    Task<O, X>* GetNextTask() { return nt_; }
-    Task<I, O>* GetCurrentTask() { return ct_; }
+  void FinalFailed(const F& f) override {
+    if (fl_) {
+      fl_->Failed(f);
+    }
+  }
 
-  private:
-    Task<I, O>* ct_ = nullptr;
-    Task<O, X>* nt_ = nullptr;
-    AssemblerListener<F>* listener_ = nullptr;
+ protected:
+  std::shared_ptr<Task<I, O>> GetCurrentTask() { return ct_; }
+  std::shared_ptr<Task<O, X>> GetNextTask() { return nt_; }
+
+ private:
+  std::shared_ptr<Task<I, O>> ct_;
+  std::shared_ptr<Task<O, X>> nt_;
+  std::shared_ptr<FinalListener<F>> fl_;
 };
 
-template <typename I, typename O>
-template <typename X, typename F>
+template <typename I, typename O, typename X, typename F>
 class ThenTaskBridge final : public TaskBridge<I, O, X, F> {
-  public:
-    explicit ThenTaskBridge(AssemblerListener<F>* listener) : TaskBridge(listener) {}
+ public:
+  ThenTaskBridge(std::shared_ptr<Task<I, O>> ct, std::shared_ptr<Task<O, X>> nt,
+                 std::shared_ptr<FinalListener<F>> fl)
+      : TaskBridge<I, O, X, F>(ct, nt, fl) {}
+  ~ThenTaskBridge() override = default;
 
-    ~ThenTaskBridge() override = default;
-
-    void NextSuccess(const O& o) override {
-        auto* ct = GetCurrentTask();
-        if (!ct) {
-            return;
-        }
-        ct->Finish(o);
-
-        auto* nt = GetNextTask();
-        if (!nt) {
-            return;
-        }
-        nt->Run(o);
+  void NextFailed(const O& o) override {
+    auto ct = TaskBridge<I, O, X, F>::GetCurrentTask();
+    if (!ct) {
+      return;
     }
-
-    void NextFailed(const O& o) override {
-        auto* ct = GetCurrentTask();
-        if (!ct) {
-            return;
-        }
-        ct->Finish(o);
-    }
+    ct->Finish(o);
+  }
 };
 
-template <typename I, typename O>
-template <typename X, typename F>
+template <typename I, typename O, typename X, typename F>
 class FollowTaskBridge final : public TaskBridge<I, O, X, F> {
-  public:
-    explicit FollowTaskBridge(AssemblerListener<F>* listener) : TaskBridge(listener) {}
+ public:
+  FollowTaskBridge(std::shared_ptr<Task<I, O>> ct,
+                   std::shared_ptr<Task<O, X>> nt,
+                   std::shared_ptr<FinalListener<F>> fl)
+      : TaskBridge<I, O, X, F>(ct, nt, fl) {}
+  ~FollowTaskBridge() override = default;
 
-    ~FollowTaskBridge() override = default;
-
-    void NextSuccess(const O& o) override {
-        auto* ct = GetCurrentTask();
-        if (!ct) {
-            return;
-        }
-        ct->Finish(o);
-
-        auto* nt = GetNextTask();
-        if (!nt) {
-            return;
-        }
-        nt->Run(o);
-    }
-
-    void NextFailed(const O& o) override {
-        auto* ct = GetCurrentTask();
-        if (!ct) {
-            return;
-        }
-        ct->Finish(o);
-
-        auto* nt = GetNextTask();
-        if (!nt) {
-            return;
-        }
-        nt->Run(o);
-    }
+  void NextFailed(const O& o) override {
+    TaskBridge<I, O, X, F>::NextSuccess(o);
+  }
 };
 
-#if 0
-class AsyncTaskBridge;
-class LoopTaskBridge;
-class RetryTaskBridge;
-#endif
+template <typename I, typename O, typename F>
+class BaseTask : public Task<I, O>,
+                 public std::enable_shared_from_this<BaseTask<I, O, F>> {
+ public:
+  ~BaseTask() override = default;
 
-template <typename I, typename O>
-template <typename F>
-class BaseTask : public Task<I, O> {
-  public:
-    ~BaseTask() override = default;
+  template <typename X>
+  std::shared_ptr<BaseTask<O, X, F>> Then(
+      std::shared_ptr<BaseTask<O, X, F>> nt) {
+    auto bridge = std::make_unique<ThenTaskBridge<I, O, X, F>>(
+        this->shared_from_this(), nt, fl_);
+    l_ = std::move(bridge);
+    return nt;
+  }
 
-    template <typename X>
-    BaseTask<O, X>* Then(BaseTask<O, X>* task) {
-        listener_ = new ThenTaskBridge<I, O, X, F>(assembler_listener_);
-        bridge->SetTask(this, task);
-        return task;
+  template <typename X>
+  std::shared_ptr<BaseTask<O, X, F>> Follow(
+      std::shared_ptr<BaseTask<O, X, F>> nt) {
+    auto bridge = std::make_unique<FollowTaskBridge<I, O, X, F>>(
+        this->shared_from_this(), nt, fl_);
+    l_ = std::move(bridge);
+    return nt;
+  }
+
+  void SetFinalListener(std::shared_ptr<FinalListener<F>> fl) { fl_ = fl; }
+
+ protected:
+  void NextSuccess(const O& o) {
+    if (l_) {
+      l_->NextSuccess(o);
     }
+  }
 
-    template <typename X>
-    BaseTask<O, X>* Follow(BaseTask<O, X>* task) {
-        listener_ = new FollowTaskBridge<I, O, X, F>(assembler_listener_);
-        bridge->SetTask(this, task);
-        return task;
+  void NextFailed(const O& o) {
+    if (l_) {
+      l_->NextFailed(o);
     }
+  }
 
-  protected:
-    void NextSuccess(const O& o) final {
-        if (listener_) {
-            listener_->NextSuccess(o);
-        }
+  void FinalSuccess(const F& f) {
+    if (l_) {
+      l_->FinalSuccess(f);
     }
+  }
 
-    void NextFailed(const O& o) final {
-        if (listener_) {
-            listener_->NextFailed(o);
-        }
+  void FinalFailed(const F& f) {
+    if (l_) {
+      l_->FinalFailed(f);
     }
+  }
 
-    void FinalSuccess(const F& f) final {
-        if (listener_) {
-            listener_->FinalSuccess(f);
-        }
-    }
-
-    void FinalFailed(const F& f) final {
-        if (listener_) {
-            listener_->FinalFailed(f);
-        }
-    }
-
-  private:
-    TaskListener<O, F>* listener_ = nullptr;
-    AssemblerListener<F>* assembler_listener_ = nullptr;
+ private:
+  std::unique_ptr<TaskListener<O, F>> l_;
+  std::shared_ptr<FinalListener<F>> fl_;
 };
 
 }  // namespace nf
