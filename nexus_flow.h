@@ -50,7 +50,7 @@ class TaskListener {
 template <typename I, typename O, typename X, typename F>
 class TaskBridge : public TaskListener<O, F> {
  public:
-  TaskBridge(std::shared_ptr<Task<I, O>> ct, std::shared_ptr<Task<O, X>> nt,
+  TaskBridge(Task<I, O>* ct, Task<O, X>* nt,
              std::shared_ptr<FinalListener<F>> fl)
       : ct_(ct), nt_(nt), fl_(fl) {}
   ~TaskBridge() override = default;
@@ -80,19 +80,19 @@ class TaskBridge : public TaskListener<O, F> {
   }
 
  protected:
-  std::shared_ptr<Task<I, O>> GetCurrentTask() { return ct_; }
-  std::shared_ptr<Task<O, X>> GetNextTask() { return nt_; }
+  Task<I, O>* GetCurrentTask() { return ct_; }
+  Task<O, X>* GetNextTask() { return nt_; }
 
  private:
-  std::shared_ptr<Task<I, O>> ct_;
-  std::shared_ptr<Task<O, X>> nt_;
+  Task<I, O>* ct_ = nullptr;
+  Task<O, X>* nt_ = nullptr;
   std::shared_ptr<FinalListener<F>> fl_;
 };
 
 template <typename I, typename O, typename X, typename F>
 class ThenTaskBridge final : public TaskBridge<I, O, X, F> {
  public:
-  ThenTaskBridge(std::shared_ptr<Task<I, O>> ct, std::shared_ptr<Task<O, X>> nt,
+  ThenTaskBridge(Task<I, O>* ct, Task<O, X>* nt,
                  std::shared_ptr<FinalListener<F>> fl)
       : TaskBridge<I, O, X, F>(ct, nt, fl) {}
   ~ThenTaskBridge() override = default;
@@ -109,8 +109,7 @@ class ThenTaskBridge final : public TaskBridge<I, O, X, F> {
 template <typename I, typename O, typename X, typename F>
 class FollowTaskBridge final : public TaskBridge<I, O, X, F> {
  public:
-  FollowTaskBridge(std::shared_ptr<Task<I, O>> ct,
-                   std::shared_ptr<Task<O, X>> nt,
+  FollowTaskBridge(Task<I, O>* ct, Task<O, X>* nt,
                    std::shared_ptr<FinalListener<F>> fl)
       : TaskBridge<I, O, X, F>(ct, nt, fl) {}
   ~FollowTaskBridge() override = default;
@@ -121,25 +120,20 @@ class FollowTaskBridge final : public TaskBridge<I, O, X, F> {
 };
 
 template <typename I, typename O, typename F>
-class BaseTask : public Task<I, O>,
-                 public std::enable_shared_from_this<BaseTask<I, O, F>> {
+class BaseTask : public Task<I, O> {
  public:
   ~BaseTask() override = default;
 
   template <typename X>
-  std::shared_ptr<BaseTask<O, X, F>> Then(
-      std::shared_ptr<BaseTask<O, X, F>> nt) {
-    auto bridge = std::make_unique<ThenTaskBridge<I, O, X, F>>(
-        this->shared_from_this(), nt, fl_);
+  BaseTask<O, X, F>* Then(BaseTask<O, X, F>* nt) {
+    auto bridge = std::make_unique<ThenTaskBridge<I, O, X, F>>(this, nt, fl_);
     l_ = std::move(bridge);
     return nt;
   }
 
   template <typename X>
-  std::shared_ptr<BaseTask<O, X, F>> Follow(
-      std::shared_ptr<BaseTask<O, X, F>> nt) {
-    auto bridge = std::make_unique<FollowTaskBridge<I, O, X, F>>(
-        this->shared_from_this(), nt, fl_);
+  BaseTask<O, X, F>* Follow(BaseTask<O, X, F>* nt) {
+    auto bridge = std::make_unique<FollowTaskBridge<I, O, X, F>>(this, nt, fl_);
     l_ = std::move(bridge);
     return nt;
   }

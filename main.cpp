@@ -133,19 +133,25 @@ class RiskCheck final : public nf::BaseTask<OrderInfo, FlowResult, FlowResult> {
 class OrderFlowAssembler final : public nf::Assembler<long> {
  public:
   OrderFlowAssembler() {
+    task_a_ = new QueryOrder();
+    task_b_ = new ReserveInventory();
+    task_c_ = new RiskCheck();
     final_listener_ = std::make_shared<OrderFlowListener>();
   }
 
+  ~OrderFlowAssembler() override {
+    delete task_a_;
+    delete task_b_;
+    delete task_c_;
+  }
+
   void Assemble() override {
-    task_a_ = std::make_shared<QueryOrder>();
-    task_b_ = std::make_shared<ReserveInventory>();
-    task_c_ = std::make_shared<RiskCheck>();
 
     task_a_->SetFinalListener(final_listener_);
     task_b_->SetFinalListener(final_listener_);
     task_c_->SetFinalListener(final_listener_);
 
-    task_a_->Then<OrderInfo>(task_b_)->Follow<FlowResult>(task_c_);
+    task_a_->Then(task_b_)->Follow(task_c_);
   }
 
   void Run(const long& initial_input) override {
@@ -160,9 +166,9 @@ class OrderFlowAssembler final : public nf::Assembler<long> {
   }
 
  private:
-  std::shared_ptr<QueryOrder> task_a_;
-  std::shared_ptr<ReserveInventory> task_b_;
-  std::shared_ptr<RiskCheck> task_c_;
+  QueryOrder* task_a_ = nullptr;
+  ReserveInventory* task_b_ = nullptr;
+  RiskCheck* task_c_ = nullptr;
   std::shared_ptr<OrderFlowListener> final_listener_;
 };
 
